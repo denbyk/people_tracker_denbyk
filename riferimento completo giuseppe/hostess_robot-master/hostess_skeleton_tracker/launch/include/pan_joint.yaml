@@ -1,0 +1,2 @@
+##ID joint_name init min max Pgain Igain Dgain ## If AX18: ID joint_name init min max CWmargin CCWmargin(1...255 -stiff to compl-) CWslope CCW 
+0 pan_joint 2100 1000 3200 32 1 0   #sistema nuzoo: 0 pan_joint 2153 1448 2708 32 1 0     sistema mk: 0 pan_joint 2153 1448 2708 32 1 0 

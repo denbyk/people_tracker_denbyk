@@ -1,0 +1,10 @@
+<!--	This launch file handles the point cloud reconstruction and the face recognition software. This file is meant to be launched on a remote workstation. -->
+
+<launch>
+	<include file="$(find hostess_full)/launch/include/openni.launch.xml" />
+	<include file="$(find hostess_full)/launch/include/people_detection.launch.xml" />
+	<include file="$(find hostess_full)/launch/include/skeleton_tracker.launch.xml" />
+	<include file="$(find hostess_full)/launch/include/hostess_user_registration.launch.xml" />
+	<node pkg="tf" type="static_transform_publisher" name="top_broadcaster" args="-0.145 0 1.025 0 0 0 1 base_link virgil_top_link 50" />
+	<node pkg="tf" type="static_transform_publisher" name="asus_broadcaster" args="0 0 0.05 0 0 1 0 pan_link camera_link 50" />
+</launch>

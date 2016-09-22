@@ -1,0 +1,6 @@
+<launch>
+	<group ns="hostess_skeleton_tracker">
+		<node pkg="hostess_skeleton_tracker" type="twist_mediator" name="twist_mediator" output="screen" />
+		<node pkg="hostess_skeleton_tracker" type="identity_setter" name="identity_setter" output="screen" />
+	</group>
+</launch>

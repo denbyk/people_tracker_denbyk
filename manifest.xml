@@ -1,8 +1,0 @@
-<rosdep name="openni-dev" />
-<rosdep name="ps-engine" />
-<rosdep name="nite-dev"/>
-
-
-<export>
-  <cpp cflags="-I/usr/include/openni -I/usr/include/nite" />
-</export>
