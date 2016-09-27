@@ -32,6 +32,9 @@ void publishTransforms(const std::string& frame_id);
 void publishUserTransforms(XnUserID const& user, std::string const& frame_id);
 bool checkCenterOfMass(XnUserID const& user);
 
+
+ros::Publisher track_pub;
+
 int main(int argc, char **argv){
   ros::init(argc, argv, "pplTracker");
   ros::NodeHandle nh;
@@ -59,7 +62,7 @@ int main(int argc, char **argv){
     {
       ROS_INFO("InitFromXml failed: %s Retrying in 3 seconds...", xnGetStatusString(nRetVal));
       ros::Duration(3).sleep();
-      std::cout << "small error\n";
+
     }
     else
     {
@@ -67,10 +70,11 @@ int main(int argc, char **argv){
     }
   }
 
-  //cerca nodo ti tipo de//   //veriica che lo userGenerator creato supporti SKELETON
 
-  // ros::spinOnce();
-  // loop_rate.sleep();
+  //std::string frame_id;
+
+  nRetVal = g_Context.FindExistingNode(XN_NODE_TYPE_DEPTH, g_DepthGenerator);
+
 
   if(nRetVal != XN_STATUS_OK)
   {
@@ -79,8 +83,6 @@ int main(int argc, char **argv){
 
   //cerca nodo ti tipo user generator e lo salva in g_UserGenerator
   nRetVal = g_Context.FindExistingNode(XN_NODE_TYPE_USER, g_UserGenerator);
-
-  std::cout << "ciao ";
 
 
   if (nRetVal != XN_STATUS_OK)
@@ -124,6 +126,8 @@ int main(int argc, char **argv){
   std::string frame_id("camera_depth_frame");
   nh.getParam("camera_frame_id", frame_id);
 
+
+  std::cout << "init ok\n";
   //ciclo principale.
   while(nh.ok())
   {
@@ -206,16 +210,64 @@ void publishTransforms(const std::string& frame_id)
   }
 }
 
+//calcola e pubblica posizione e velocità di user
+void publishUserTracking(XnUserID const& user, ros::NodeHandler nh)
+{
+  //ottiene posizione e orientamento busto di user
+  XnSkeletonJointPosition joint_position;
+  XnSkeletonJointOrientation joint_orientation;
+
+  if(g_UserGenerator.GetSkeletonCap().IsTracking(user))
+  {
+    //ottiene posizione e orientamento di testa e torso
+    g_UserGenerator.GetSkeletonCap().GetSkeletonJointPosition(user, XN_SKEL_TORSO, joint_position);
+    g_UserGenerator.GetSkeletonCap().GetSkeletonJointOrientation(user, XN_SKEL_TORSO, joint_orientation);
+
+    if(joint_position.fConfidence < 1 || joint_position.fConfidence < 1)
+    {
+      return;
+    }
+  }
+  else
+  {
+    return;
+  }
+  //estrai x,y,z (posizioni)
+  double x = -joint_position[i].position.X / 1000.0;
+  double y = joint_position[i].position.Y / 1000.0;
+  double z = joint_position[i].position.Z / 1000.0;
+
+  //TODO: ma la rotazione serve?
+  //estrae matrice di rotazione
+  XnFloat* m = joint_orientation[i].orientation.elements;
+  KDL::Rotation rotation(m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7], m[8]);
+  double qx, qy, qz, qw;
+  rotation.GetQuaternion(qx, qy, qz, qw);
+
+  //output
+  oss << "torso_" << user;
+
+  //calcola velocità tra istanti successivi
+  //pubblica dati
+  //TODO: nota: ci deve essere un unico topic per tutti gli utenti, è sbagliato farlo qui. va fatto nella funzione che li pubblica tutti
+  track_pub = nh.advertise("user_tracking", 1000);
+
+}
+
+
+
+/*-----------------------------------------------------------------*/
 void publishUserTransforms(XnUserID const& user, std::string const& frame_id)
 {
   static tf::TransformBroadcaster broadcaster;
-  
+
   //ottiene posizione e orientamento dal tracker di torso e testa dell'utente user
   XnSkeletonJointPosition joint_position[2];
   XnSkeletonJointOrientation joint_orientation[2];
 
   if(g_UserGenerator.GetSkeletonCap().IsTracking(user))
   {
+    //ottiene posizione e orientamento di testa e torso
     g_UserGenerator.GetSkeletonCap().GetSkeletonJointPosition(user, XN_SKEL_TORSO, joint_position[0]);
     g_UserGenerator.GetSkeletonCap().GetSkeletonJointOrientation(user, XN_SKEL_TORSO, joint_orientation[0]);
     g_UserGenerator.GetSkeletonCap().GetSkeletonJointPosition(user, XN_SKEL_HEAD, joint_position[1]);
@@ -233,8 +285,8 @@ void publishUserTransforms(XnUserID const& user, std::string const& frame_id)
 
   ros::Time now = ros::Time::now();
 
+  //listener per ascolto di posizione frame camera rispetto al mondo
   static tf::TransformListener listener;
-
   tf::StampedTransform parentTransform;
 
   bool sendGlobal;
@@ -243,7 +295,6 @@ void publishUserTransforms(XnUserID const& user, std::string const& frame_id)
   {
     //ascolta la trasformazione da frame_id (depth_camera_frame) a map, prendendo il frame + recente e memorizza in parent transform
     listener.lookupTransform("map", frame_id, ros::Time(0), parentTransform);
-
     sendGlobal = true;
   }
   catch(tf::TransformException& ex)
@@ -253,18 +304,22 @@ void publishUserTransforms(XnUserID const& user, std::string const& frame_id)
 
   for(int i = 0; i < 2; i++)
   {
+    //sia per testa che per torso, estrai x,y,z (posizioni)
     double x = -joint_position[i].position.X / 1000.0;
     double y = joint_position[i].position.Y / 1000.0;
     double z = joint_position[i].position.Z / 1000.0;
 
+    //estrae matrice di rotazione
     XnFloat* m = joint_orientation[i].orientation.elements;
     KDL::Rotation rotation(m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7], m[8]);
 
     double qx, qy, qz, qw;
+    //è passato da KDL per estrarre il quaternione
     rotation.GetQuaternion(qx, qy, qz, qw);
 
     std::ostringstream oss, global_oss;
 
+    //output
     if(i == 0)
     {
       oss << "torso_" << user;
@@ -284,9 +339,11 @@ void publishUserTransforms(XnUserID const& user, std::string const& frame_id)
     change_frame.setOrigin(tf::Vector3(0, 0, 0));
 
     tf::Quaternion frame_rotation;
-    frame_rotation.setEulerZYX(1.5708, 0, 1.5708);
+    frame_rotation.setEulerZYX(1.5708, 0, 1.5708); //<????????????????????????????????????? forse per bloccare la camera orientata in un certo modo.
     change_frame.setRotation(frame_rotation);
 
+    //transform = trasformazione ogg finale
+    //change_frame serve per modificare la trasformazione in base a posizionamento e inclinazione telecamera
     transform = change_frame * transform;
 
     //pubblica la trasformazione
@@ -294,7 +351,7 @@ void publishUserTransforms(XnUserID const& user, std::string const& frame_id)
 
     if(sendGlobal)
     {
-      //pubblica trasformazinoe locale
+      //pubblica trasformazinoe globale
       tf::Transform global = parentTransform * transform;
       broadcaster.sendTransform(tf::StampedTransform(global, now, "map", global_oss.str()));
     }
