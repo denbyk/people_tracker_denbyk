@@ -9,7 +9,16 @@ find_package(catkin REQUIRED COMPONENTS
   std_msgs
   roslib
   tf
+  people_tracker_denbyk_msg
 )
+
+#add_message_files(
+#  FILES
+#  UserTracking.msg
+#)
+
+generate_messages(DEPENDENCIES std_msgs)
+
 catkin_package(
 	INCLUDE_DIRS include
   CATKIN_DEPENDS roscpp std_msgs roslib tf
@@ -27,7 +36,10 @@ include_directories(
 link_directories(${catkin_LIBRARY_DIRS})
 link_directories(${orocos_kdl_LIBRARY_DIRS})
 
+
+
 add_executable(pplTracker src/PeopleTracker_denbyk.cpp)
+add_dependencies(pplTracker people_tracker_denbyk_msg_generate_messages_cpp)
 
 target_link_libraries(pplTracker
   ${catkin_LIBRARIES}
