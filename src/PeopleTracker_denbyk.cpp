@@ -6,15 +6,20 @@
 #include <tf/transform_broadcaster.h>
 #include <tf/transform_listener.h>
 
+#include <kdl/frames.hpp>
+
 #include <people_tracker_denbyk_msg/UserTracking.h>
 
-#include <kdl/frames.hpp>
+#include <opencv2/video/tracking.hpp>
 /*
 #include <XnOpenNI.h>
 #include <XnCodecIDs.h>
 */
 
-#define MAX_USERS 6
+#define MAX_USERS 1
+
+typedef people_tracker_denbyk_msg::SingleUserTracking SingleUserTracking;
+typedef people_tracker_denbyk_msg::UserTracking UserTracking;
 
 //contesto openNI
 xn::Context        g_Context;
@@ -30,12 +35,13 @@ void XN_CALLBACK_TYPE User_OutOfScene(xn::UserGenerator& generator, XnUserID nId
 XnUInt32 calibrationData;
 std::string genericUserCalibrationFileName;
 
-void publishTransforms(const std::string& frame_id);
-void publishUserTransforms(XnUserID const& user, std::string const& frame_id);
+void publishTrackings(ros::Publisher& track_pub);
+SingleUserTracking calcSingleUserTracking(XnUserID const& user, SingleUserTracking& PrevTracking);
 bool checkCenterOfMass(XnUserID const& user);
 
 
 ros::Publisher track_pub;
+ros::Publisher DEBUGtrack_pub;
 
 int main(int argc, char **argv){
   ros::init(argc, argv, "pplTracker");
@@ -55,9 +61,6 @@ int main(int argc, char **argv){
     //inizializzo contesto openni
     //ROS_INFO(configFilename.c_str(),xnGetStatusString(nRetVal));
     nRetVal = g_Context.InitFromXmlFile(configFilename.c_str());
-
-    //TODO: remove
-    nRetVal = XN_STATUS_OK;
 
     //riprovo tra un po'
     if(nRetVal != XN_STATUS_OK)
@@ -113,7 +116,7 @@ int main(int argc, char **argv){
   XnCallbackHandle hUserCallbacks;
   g_UserGenerator.RegisterUserCallbacks(User_NewUser, User_LostUser, NULL, hUserCallbacks);
   g_UserGenerator.RegisterToUserExit(User_OutOfScene, NULL, hUserCallbacks);
-  g_UserGenerator.RegisterToUserReEnter(User_BackIntoScene, NULL, hUserCallbacks);
+  g_UserGenerator.RegisterToUserReEnter(User_BackIntoScene, NULL, hUserCallbacks); //< ma viene mai usato????
 
   //attivo la generazione dei vari generators
   nRetVal = g_Context.StartGeneratingAll();
@@ -130,13 +133,20 @@ int main(int argc, char **argv){
 
 
   std::cout << "init ok\n";
+
+  //init msg
+  track_pub = nh.advertise<UserTracking>("people_tracking", 100);
+  DEBUGtrack_pub = nh.advertise<SingleUserTracking>("DEBUG_people_tracking", 100);
   //ciclo principale.
   while(nh.ok())
   {
+    //std::cout << "nh okok\n";
     //aggiorna il contesto e aspetta
+    //std::cout<<"pre\n";
     g_Context.WaitAndUpdateAll();
+    //std::cout<<"post\n";
     //pubblica le trasformazioni su frame_id
-    //publishTransforms(frame_id);
+    publishTrackings(track_pub);
     //dormi per un tot.
     ros::Rate(30).sleep();
   }
@@ -150,6 +160,7 @@ int main(int argc, char **argv){
 
 void XN_CALLBACK_TYPE User_NewUser(xn::UserGenerator& generator, XnUserID nId, void* pCookie)
 {
+  std::cout << "newUser\n";
   ROS_INFO("New User %d.", nId);
 
   //se non ha ancora fatto calibrazione la carica da file e ?la salva su calibrationData?
@@ -190,17 +201,50 @@ void XN_CALLBACK_TYPE User_OutOfScene(xn::UserGenerator& generator, XnUserID nId
 
 /*publishing----------------------------------------------------------------------------------------------*/
 
-void publishTrackings()
+void publishTrackings(ros::Publisher& track_pub)
 {
-  track_pub = nh.advertise("people_tracking", 1000);
+  XnUInt16 users_count = MAX_USERS;
+  XnUserID users[MAX_USERS];
+  UserTracking allTrackings;
+
+  g_UserGenerator.GetUsers(users, users_count);
+
+  SingleUserTracking PrevTracking[users_count];
+
+  //per ogni utente pubblica il tracking
+  for(int i = 0; i < users_count; i++)
+  {
+    XnUserID CurrUser = users[i];
+
+    SingleUserTracking sut = calcSingleUserTracking(CurrUser, PrevTracking[i]);
+
+    if (sut.UserID == -1)
+    {
+      std::cout << "user[" << i << "] è null. userCount = " << users_count << "\n";
+    }
+
+    allTrackings.user.push_back(sut);
+    PrevTracking[i] = sut;
+    DEBUGtrack_pub.publish(allTrackings.user[i]);
+  }
+  allTrackings.userCount = users_count;
+
+  track_pub.publish(allTrackings);
 }
 
 //calcola e pubblica posizione e velocità di user
-void publishSingleUserTracking(XnUserID const& user, ros::NodeHandler nh)
+
+SingleUserTracking calcSingleUserTracking(XnUserID const& user, SingleUserTracking& PrevTracking)
 {
+  //std::cout<<"calcSingleUserTracking\n";
+
+  SingleUserTracking NullUserTracking;
+  NullUserTracking.UserID = -1;
+
   //ottiene posizione e orientamento busto di user
   XnSkeletonJointPosition joint_position;
   XnSkeletonJointOrientation joint_orientation;
+
 
   if(g_UserGenerator.GetSkeletonCap().IsTracking(user))
   {
@@ -208,37 +252,50 @@ void publishSingleUserTracking(XnUserID const& user, ros::NodeHandler nh)
     g_UserGenerator.GetSkeletonCap().GetSkeletonJointPosition(user, XN_SKEL_TORSO, joint_position);
     g_UserGenerator.GetSkeletonCap().GetSkeletonJointOrientation(user, XN_SKEL_TORSO, joint_orientation);
 
-    if(joint_position.fConfidence < 1 || joint_position.fConfidence < 1)
+
+    if(joint_position.fConfidence < 1/* || joint_position.fConfidence < 1*/)
     {
-      return;
+      std::cout << "no confidence f: " << joint_position.fConfidence << "\n";
+      return NullUserTracking;
     }
   }
   else
   {
-    return;
+    std::cout << "no tracking\n";
+    return NullUserTracking;
   }
   //estrai x,y,z (posizioni)
-  double x = -joint_position[i].position.X / 1000.0;
-  double y = joint_position[i].position.Y / 1000.0;
-  double z = joint_position[i].position.Z / 1000.0;
+  double x = -joint_position.position.X / 1000.0;
+  double y = joint_position.position.Y / 1000.0;
+  double z = joint_position.position.Z / 1000.0;
 
   //TODO: ma la rotazione serve?
   //estrae matrice di rotazione
-  XnFloat* m = joint_orientation[i].orientation.elements;
-  KDL::Rotation rotation(m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7], m[8]);
-  double qx, qy, qz, qw;
-  rotation.GetQuaternion(qx, qy, qz, qw);
+  // XnFloat* m = joint_orientation.orientation.elements;
+  // KDL::Rotation rotation(m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7], m[8]);
+  // double qx, qy, qz, qw;
+  // rotation.GetQuaternion(qx, qy, qz, qw);
 
   //output
-  oss << "torso_" << user;
+  //oss << "torso_" << user;
+
+  SingleUserTracking sut;
+
+  sut.timestamp = ros::Time::now();
+  sut.UserID = user;
+  sut.Pos_X = x;
+  sut.Pos_Y = y;
+  sut.Pos_Z = z;
+
+  double time_delay = (sut.timestamp.toNSec() - PrevTracking.timestamp.toNSec()) * 1000;
 
   //calcola velocità tra istanti successivi
-  //pubblica dati
-  
+  sut.Vel_X = (x - PrevTracking.Pos_X) / time_delay;
+  sut.Vel_Y = (y - PrevTracking.Pos_Y) / time_delay;
+  sut.Vel_Z = (z - PrevTracking.Pos_Z) / time_delay;
+
+  return sut;
 }
-
-
-
 
 bool checkCenterOfMass(XnUserID const& user)
 {

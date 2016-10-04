@@ -187,8 +187,6 @@ void XN_CALLBACK_TYPE User_OutOfScene(xn::UserGenerator& generator, XnUserID nId
 }
 
 /*publishing-transforms---------------------------------------------------------------------------------------------*/
-void publishTrackings()
-
 
 
 void publishTransforms(const std::string& frame_id)
@@ -210,50 +208,6 @@ void publishTransforms(const std::string& frame_id)
       publishUserTransforms(user, frame_id);
     }
   }
-}
-
-//calcola e pubblica posizione e velocità di user
-void publishUserTracking(XnUserID const& user, ros::NodeHandler nh)
-{
-  //ottiene posizione e orientamento busto di user
-  XnSkeletonJointPosition joint_position;
-  XnSkeletonJointOrientation joint_orientation;
-
-  if(g_UserGenerator.GetSkeletonCap().IsTracking(user))
-  {
-    //ottiene posizione e orientamento di testa e torso
-    g_UserGenerator.GetSkeletonCap().GetSkeletonJointPosition(user, XN_SKEL_TORSO, joint_position);
-    g_UserGenerator.GetSkeletonCap().GetSkeletonJointOrientation(user, XN_SKEL_TORSO, joint_orientation);
-
-    if(joint_position.fConfidence < 1 || joint_position.fConfidence < 1)
-    {
-      return;
-    }
-  }
-  else
-  {
-    return;
-  }
-  //estrai x,y,z (posizioni)
-  double x = -joint_position[i].position.X / 1000.0;
-  double y = joint_position[i].position.Y / 1000.0;
-  double z = joint_position[i].position.Z / 1000.0;
-
-  //TODO: ma la rotazione serve?
-  //estrae matrice di rotazione
-  XnFloat* m = joint_orientation[i].orientation.elements;
-  KDL::Rotation rotation(m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7], m[8]);
-  double qx, qy, qz, qw;
-  rotation.GetQuaternion(qx, qy, qz, qw);
-
-  //output
-  oss << "torso_" << user;
-
-  //calcola velocità tra istanti successivi
-  //pubblica dati
-  //TODO: nota: ci deve essere un unico topic per tutti gli utenti, è sbagliato farlo qui. va fatto nella funzione che li pubblica tutti
-  track_pub = nh.advertise("user_tracking", 1000);
-
 }
 
 
