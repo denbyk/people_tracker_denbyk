@@ -8,6 +8,7 @@ find_package(OpenCV REQUIRED)
 find_package(catkin REQUIRED COMPONENTS
   roscpp
   std_msgs
+  sensor_msgs
   roslib
   tf
   people_tracker_denbyk_msg
@@ -15,7 +16,7 @@ find_package(catkin REQUIRED COMPONENTS
 
 catkin_package(
 	INCLUDE_DIRS include
-  CATKIN_DEPENDS roscpp std_msgs roslib tf
+  CATKIN_DEPENDS roscpp std_msgs roslib tf sensor_msgs
   DEPENDS orocos_kdl OpenCV
 )
 
@@ -49,8 +50,6 @@ target_link_libraries(pplTracker OpenNI)
 
 #just to test
 #add_executable(testKalman src/testKalman.cpp)
-
-
 #target_link_libraries(testKalman
 #  ${catkin_LIBRARIES}
 #  ${OpenCV_LIBS}

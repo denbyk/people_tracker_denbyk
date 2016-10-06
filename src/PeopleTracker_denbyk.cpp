@@ -10,17 +10,28 @@
 #include <kdl/frames.hpp>
 
 #include <people_tracker_denbyk_msg/UserTracking.h>
-#include <sensor_msgs/Image>
+#include <sensor_msgs/Image.h>
 #include <opencv2/video/tracking.hpp>
 /*
 #include <XnOpenNI.h>
 #include <XnCodecIDs.h>
 */
 
+/*TODO memo:
+   no kalman
+   filtrare velocità piccole
+   idea: filtro passa basso?
+   orientamento torso da fermo (openni lo fa?)
+   usare msg di ros people ?
+
+*/
+
 //settings
 #define NOCAMERA_MODE false
-#define WHAT_TO_TRACK XN_SKEL_HEAD //XN_SKEL_TORSO
+#define WHAT_TO_TRACK XN_SKEL_TORSO //XN_SKEL_HEAD
 #define MAX_USERS 2
+#define min_position_precision 0.001
+#define min_velocity_precision 0.03
 
 
 typedef people_tracker_denbyk_msg::SingleUserTracking SingleUserTracking;
@@ -41,6 +52,8 @@ void XN_CALLBACK_TYPE User_NewUser(xn::UserGenerator& generator, XnUserID nId, v
 void XN_CALLBACK_TYPE User_LostUser(xn::UserGenerator& generator, XnUserID nId, void* pCookie);
 void XN_CALLBACK_TYPE User_BackIntoScene(xn::UserGenerator& generator, XnUserID nId, void* pCookie);
 void XN_CALLBACK_TYPE User_OutOfScene(xn::UserGenerator& generator, XnUserID nId, void* pCookie);
+void updateDepthImage(const sensor_msgs::Image& dephImageMsg);
+double FloorTo(double num, double LeastSignificantChange);
 
 XnUInt32 calibrationData;
 std::string genericUserCalibrationFileName;
@@ -168,37 +181,40 @@ SingleUserTracking calcSingleUserTracking(XnUserID const& user, SingleUserTracki
    {
       //ottiene posizione e orientamento di testa e torso
       g_UserGenerator.GetSkeletonCap().GetSkeletonJointPosition(user, WHAT_TO_TRACK, joint_position);
-      //g_UserGenerator.GetSkeletonCap().GetSkeletonJointOrientation(user, WHAT_TO_TRACK, joint_orientation);
+      g_UserGenerator.GetSkeletonCap().GetSkeletonJointOrientation(user, WHAT_TO_TRACK, joint_orientation);
 
 
-      if(joint_position.fConfidence < 1/* || joint_position.fConfidence < 1*/)
+      if(joint_position.fConfidence < 1)
       {
-         std::cout << "no confidence f: " << joint_position.fConfidence << "\n";
+         //std::cout << "no confidence f: " << joint_position.fConfidence << "\n";
          return NullUserTracking;
       }
    }
    else
    {
-      std::cout << "no tracking\n";
+      //std::cout << "no tracking\n";
       return NullUserTracking;
    }
    //estrai x,y,z (posizioni)
-   double x = -joint_position.position.X;
-   double y = joint_position.position.Y;
-   double z = joint_position.position.Z;
+   double x = -joint_position.position.X/1000;
+   double y = joint_position.position.Y/1000;
+   double z = joint_position.position.Z/1000;
 
-   //round and convert to meters
-   x = floor(x/10)/100;
-   y = floor(y/10)/100;
-   z = floor(z/10)/100;
+   //floor to mm
+   x = FloorTo(x, min_position_precision);
+   y = FloorTo(y, min_position_precision);
+   z = FloorTo(z, min_position_precision);
 
    //TODO: ma la rotazione serve?
    //estrae matrice di rotazione
-   // XnFloat* m = joint_orientation.orientation.elements;
-   // KDL::Rotation rotation(m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7], m[8]);
-   // double qx, qy, qz, qw;
-   // rotation.GetQuaternion(qx, qy, qz, qw);
-
+   XnFloat* m = joint_orientation.orientation.elements;
+   KDL::Rotation rotation(m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7], m[8]);
+   double qx, qy, qz, qw;
+   rotation.GetQuaternion(qx, qy, qz, qw);
+   std::cout << m[0] << "\t" << m[1] << "\t" << m[2] << "\n";
+   std::cout << m[3] << "\t" << m[4] << "\t" << m[5] << "\n";
+   std::cout << m[6] << "\t" << m[7] << "\t" << m[8] << "\n";
+   std::cout << "----------------------\n";
    //output
    //oss << "torso_" << user;
 
@@ -226,11 +242,16 @@ SingleUserTracking calcSingleUserTracking(XnUserID const& user, SingleUserTracki
       double Vel_Y = (y - PrevTracking.Pos_Y) / time_delay;
       double Vel_Z = (z - PrevTracking.Pos_Z) / time_delay;
 
-      sut.Vel_X = floor(Vel_X*1000)/1000;
-      sut.Vel_Y = floor(Vel_Y*1000)/1000;
-      sut.Vel_Z = floor(Vel_Z*1000)/1000;
+      sut.Vel_X = FloorTo(Vel_X, min_velocity_precision);
+      sut.Vel_Y = FloorTo(Vel_Y, min_velocity_precision);
+      sut.Vel_Z = FloorTo(Vel_Z, min_velocity_precision);
    }
    return sut;
+}
+
+double FloorTo(double num, double LeastSignificantChange)
+{
+   return floor(num/LeastSignificantChange)*LeastSignificantChange;
 }
 
 bool checkCenterOfMass(XnUserID const& user)
@@ -324,7 +345,7 @@ void openni_init(ros::NodeHandle& nh)
 
    if(NOCAMERA_MODE)
    {
-      ros::Subscriber sub = nh.subscribe("/camera/depth/image_raw", 1000, chatterCallback);
+      ros::Subscriber sub = nh.subscribe("/camera/depth/image_raw", 1000, updateDepthImage);
       // Depth generator
       g_DepthGenerator.Create(g_Context);
       // Mock depth generator
@@ -382,7 +403,8 @@ void openni_init(ros::NodeHandle& nh)
    nh.getParam("camera_frame_id", frame_id);
 }
 
-void chatterCallback(const sensor_msgs::Image& dephImageMsg)
+void updateDepthImage(const sensor_msgs::Image& depthImageMsg)
 {
    currDepthImage = depthImageMsg;
+   std::cout << "updateDepthImage";
 }
