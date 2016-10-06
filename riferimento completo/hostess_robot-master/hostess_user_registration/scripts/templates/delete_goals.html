@@ -1,0 +1,54 @@
+{% extends "bootstrap/base.html" %}
+
+{% block title %}
+	Hostess Robot
+{% endblock %}}
+
+{% block styles %}
+	{{ super() }}
+	<link rel="stylesheet" href="{{ url_for('.static', filename='styles.css') }}">
+{% endblock %}
+
+{% import "bootstrap/wtf.html" as wtf %}
+
+{% block body %}
+	{% block scripts %}
+		<script type="text/javascript" src="{{ url_for('.static', filename='scripts.js') }}"></script>
+		{{ super() }}
+	{% endblock %}
+	<div class="container">
+		<div class="page-header">
+			<h1>Rimuovi destinazioni</h1>
+		</div>
+		<div class="row">
+			<div class="col-md-12">
+				<table class="table table-hover" id="table">
+					<thead>
+						<tr>
+							<th style="width:1%"><label><input type="checkbox" id="selectAll" autocomplete="off" onClick="toggle(this);"></label></th>
+					        <th>Id</th>
+					        <th>Destinazione</th>
+					        <th>Posizione</th>
+						</tr>
+					</thead>
+					<tbody>
+						{% for goal in goals %}
+						<tr>
+							<td><input type="checkbox" name="checkbox" id="checkbox-{{ goal.id }}" autocomplete="off" onClick="onToggle(this);"></td>
+							<td>{{ goal.id }}</td>
+							<td>{{ goal.label }}</td>
+							<td> ({{ goal.x }}, {{ goal.y}})</td>
+						</tr>
+						{% endfor %}
+					</tbody>
+				</table>
+			</div>
+		</div>
+		<div class="page-footer">
+			<input class="btn btn-default" type="button" value="Rimuovi destinazioni selezionate" onclick="deleteGoals();" />
+			<input class="btn btn-default" type="button" value="Ritorna alle destinazioni" onclick="window.location='/goals';" />
+			<input class="btn btn-default" type="button" value="Ritorna al menù principale" onclick="window.location='/index';" />
+			<span class="stretch"></span>
+		</div>
+	</div>
+{% endblock %}

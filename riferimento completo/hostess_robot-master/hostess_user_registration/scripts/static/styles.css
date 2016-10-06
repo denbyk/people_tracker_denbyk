@@ -1,0 +1,55 @@
+.page-footer, .stretched-div
+{
+	text-align: justify;
+	-ms-test-justify: distribute-all-lines;
+	text-justify: distribute-all-lines;
+}
+
+.page-footer
+{
+	padding-top: 9px;
+	margin-top: 10px;
+	border-top: 1px solid #EEE;
+}
+
+.stretch
+{
+	width: 100%;
+    display: inline-block;
+    font-size: 0;
+    line-height: 0
+}
+
+#map-container
+{
+	position: relative;
+}
+
+#map
+{
+	position: absolute;
+	top: 0px;
+	left: 0px;
+	z-index: 0;
+}
+
+#locator
+{
+	position: absolute;
+	top: 0px;
+	left: 0px;
+	width: 10%;
+	heght: 10%;
+	z-index: 1;
+}
+
+#transparent
+{
+	position: absolute;
+	top: 0px;
+	left: 0px;
+	z-index: 2;
+	user-drag: none;
+	-moz-user-select: none;
+	-webkit-user-drag: none;
+}
