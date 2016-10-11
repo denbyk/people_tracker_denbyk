@@ -12,11 +12,12 @@ find_package(catkin REQUIRED COMPONENTS
   roslib
   tf
   people_tracker_denbyk_msg
+  cv_bridge
 )
 
 catkin_package(
 	INCLUDE_DIRS include
-  CATKIN_DEPENDS roscpp std_msgs roslib tf sensor_msgs
+  CATKIN_DEPENDS roscpp std_msgs roslib tf sensor_msgs cv_bridge
   DEPENDS orocos_kdl OpenCV
 )
 
@@ -27,12 +28,13 @@ include_directories(
   /usr/include/nite
   ${orocos_kdl_INCLUDE_DIRS}
   ${OpenCV_INCLUDE_DIRS}
+  &{cv_bridge_INCLUDE_DIRS}
 )
 
 link_directories(${catkin_LIBRARY_DIRS})
 link_directories(${orocos_kdl_LIBRARY_DIRS})
 link_directories(${OpenCV_LIBRARY_DIRS})
-
+link_directories(${cv_bridge_LIBRARY_DIRS})
 
 #real stuff
 add_executable(pplTracker src/PeopleTracker_denbyk.cpp)
