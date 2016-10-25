@@ -9,35 +9,32 @@
 
 #include <kdl/frames.hpp>
 
-#include <people_tracker_denbyk_msg/UserTracking.h>
+#include <people_tracker_msg/UserTracking.h>
 #include <sensor_msgs/Image.h>
 #include <opencv2/video/tracking.hpp>
 #include <cv_bridge/cv_bridge.h>
 
+#include <TrackingDenoiser.h>
+
+//TODO:
 /*
-#include <XnOpenNI.h>
-#include <XnCodecIDs.h>
- */
-
-/*TODO memo:
-   no kalman
-   filtrare velocità piccole ok
-   orientamento torso da fermo (openni lo fa?) no.
-   usare msg di ros people volendo.
-
-   check con + utenti
+ * mettere rispetto a riferimento camera_link
+ * pubblicare topic pose/point da vedere su rviz
+ * volendo sistemare output video
+ * aggiungere header
  */
 
 //settings
-#define NOCAMERA_MODE false
 #define WHAT_TO_TRACK XN_SKEL_TORSO //XN_SKEL_HEAD
-#define MAX_USERS 2
-#define min_position_precision 0.001
-#define min_velocity_precision 0.03
+#define MAX_USERS 5
+#define min_position_precision 0.01
+#define min_velocity_precision 0.01
+#define VELOCITY_THRESHOLD 0.03
 #define pi 3.14159265359
+#define MOBILE_AVG_WINDOW_SIZE 10
 
-typedef people_tracker_denbyk_msg::SingleUserTracking SingleUserTracking;
-typedef people_tracker_denbyk_msg::UserTracking UserTracking;
+typedef people_tracker_msg::SingleUserTracking SingleUserTracking;
+typedef people_tracker_msg::UserTracking UserTracking;
 
 //contesto openNI
 xn::Context        g_Context;
@@ -56,23 +53,29 @@ void XN_CALLBACK_TYPE User_LostUser(xn::UserGenerator& generator, XnUserID nId, 
 void XN_CALLBACK_TYPE User_BackIntoScene(xn::UserGenerator& generator, XnUserID nId, void* pCookie);
 void XN_CALLBACK_TYPE User_OutOfScene(xn::UserGenerator& generator, XnUserID nId, void* pCookie);
 void updateDepthImage(const sensor_msgs::Image& dephImageMsg);
-double FloorTo(double num, double LeastSignificantChange);
+double ApplyNewPrecision(double num, double LeastSignificantChange);
 void updateRgbImage(const sensor_msgs::Image& rgbImageMsg);
-void VisualizeTracking(cv_bridge::CvImage& CvbImage, people_tracker_denbyk_msg::UserTracking trackings);
+void VisualizeTracking(cv_bridge::CvImage& CvbImage, people_tracker_msg::UserTracking trackings);
+double applyThreshold(double num, double threshold);
+TrackedPoint CameraLinkToCameraDepthOpticalFrame(TrackedPoint old);
+TrackedPoint CameraDepthOpticalFrameToCameraLink(TrackedPoint old);
 
 XnUInt32 calibrationData;
 std::string genericUserCalibrationFileName;
 
 void publishTrackings(ros::Publisher& track_pub);
-SingleUserTracking calcSingleUserTracking(XnUserID const& user, SingleUserTracking& PrevTracking);
-bool checkCenterOfMass(XnUserID const& user);
+SingleUserTracking calcSingleUserTracking(XnUserID const& user, SingleUserTracking& PrevTracking, TrackingDenoiser& td);
+//bool checkCenterOfMass(XnUserID const& user);
 
 
 std::map<XnUserID,SingleUserTracking> PrevTrackings;
+std::map<XnUserID,TrackingDenoiser> TrackingDenoisers;
+
 ros::Publisher track_pub;
 SingleUserTracking NullUserTracking;
 
 //---tracking visualization---
+bool VisualTrackingOn;
 ros::Subscriber subImage;
 cv_bridge::CvImage TrackingVisualizationMat;
 sensor_msgs::Image TrackingVisualizationImage;
@@ -83,52 +86,43 @@ int main(int argc, char **argv){
 	ros::init(argc, argv, "pplTracker");
 	ros::NodeHandle nh;
 
+	VisualTrackingOn = false;
+
+	if(argc>2)
+	{
+		ROS_INFO("Errore nel numero di parametri. Lanciare il pacchetto senza parametri, con l'opzione -visualizeTracking o con -h per ulteriori informazioni.\n");
+		return EXIT_FAILURE;
+	}
+
+	if (argc == 2 && std::string(argv[1]) == "-visualizeTracking")
+	{
+		VisualTrackingOn = true;
+	}
+
+	if (argc == 2 && std::string(argv[1]) == "-h")
+	{
+		ROS_INFO("Lanciare il pacchetto senza parametri o con l'opzione -visualizeTracking per ottenere il topic peopleTrackerVisualization da aprire con rviz\n");
+	}
+
 	openni_init(nh);
 
-	//PrevTrackings;// = new std::map<XnUserID,SingleUserTracking>();
 	NullUserTracking.UserID = -1;
 
 	//init msg
-	track_pub = nh.advertise<UserTracking>("people_tracking", 100);
+	track_pub = nh.advertise<UserTracking>("peopleTracking", 100);
 	std::cout << "init ok\n";
-	//DEBUGtrack_pub = nh.advertise<SingleUserTracking>("DEBUG_people_tracking", 100);
 
 	//ciclo principale.
 	while(nh.ok())
 	{
-		if (NOCAMERA_MODE)
-		{
-			// Update data
-			g_Context.WaitOneUpdateAll(g_DepthGenerator);
-			// Get original depth map
-			xn::DepthMetaData depthMD;
-			g_DepthGenerator.GetMetaData(depthMD);
-			// Make data writable and modify
-			depthMD.MakeDataWritable();
+		//aggiorna il contesto e aspetta
+		g_Context.WaitAndUpdateAll();
 
-			// Modify data ....
-			//write a function which changes the depth data in your original depth map
-			xn::DepthMap& depthMap = depthMD.WritableDepthMap();
-			for(unsigned int y = 0; y < depthMap.YRes(); ++ y)
-				for(unsigned int x = 0; x < depthMap.XRes(); ++ x)
-					depthMap (x, y) = 0; // replace the values of the depth map by recorded depth map
-			//depthMap(x,y) = subscribed_depth< data_type >.at(x,y);
-			// set the data of the mock-depth generator and pose will tracking will run on this
-			g_mock_depth.SetData(depthMD);
-		}
-		else
-		{
-			//std::cout << "nh okok\n";
-			//aggiorna il contesto e aspetta
-			//std::cout<<"pre\n";
-			g_Context.WaitAndUpdateAll();
-			//std::cout<<"post\n";
-		}
 		//pubblica le trasformazioni su frame_id
 		publishTrackings(track_pub);
 
-
-		TrackingVisualization_pub.publish(TrackingVisualizationImage);
+		if (VisualTrackingOn)
+			TrackingVisualization_pub.publish(TrackingVisualizationImage);
 
 		ros::spinOnce();
 
@@ -147,61 +141,72 @@ int main(int argc, char **argv){
 
 void publishTrackings(ros::Publisher& track_pub)
 {
-	XnUInt16 users_count = MAX_USERS;
+	XnUInt16 NITE_users_count = MAX_USERS;
+	int real_users_count = 0;
 	XnUserID users[MAX_USERS];
 	UserTracking allTrackings;
 
-	g_UserGenerator.GetUsers(users, users_count);
+	g_UserGenerator.GetUsers(users, NITE_users_count);
 
 	//per ogni utente pubblica il tracking
-	for(int i = 0; i < users_count; i++)
+	for(int i = 0; i < NITE_users_count; i++)
 	{
 		XnUserID CurrUser = users[i];
 		SingleUserTracking thisUserPrevTracking;
+		TrackingDenoiser thisUserTd(MOBILE_AVG_WINDOW_SIZE);
 		try
 		{
 			thisUserPrevTracking = PrevTrackings.at(CurrUser);
+			thisUserTd = TrackingDenoisers.at(CurrUser);
 		}
 		catch(std::out_of_range&)
 		{
 			thisUserPrevTracking = NullUserTracking;
 		}
-		SingleUserTracking sut = calcSingleUserTracking(CurrUser, thisUserPrevTracking);
+		SingleUserTracking sut = calcSingleUserTracking(CurrUser, thisUserPrevTracking, thisUserTd);
 
 		if (sut.UserID == -1)
 		{
-			std::cout << "user[" << i << "] è null. userCount = " << users_count << "\n";
+			//std::cout << "user[" << i << "] è null. userCount = " << users_count << "\n";
 			continue;
 		}
 
 		allTrackings.user.push_back(sut);
-		PrevTrackings[CurrUser] = sut;
-		//DEBUGtrack_pub.publish(allTrackings.user[i]);
+		real_users_count++;
+		PrevTrackings[CurrUser] = thisUserPrevTracking;
+		TrackingDenoisers[CurrUser] = thisUserTd;
 	}
-	allTrackings.userCount = users_count;
+	allTrackings.userCount = real_users_count;
 
-	VisualizeTracking(TrackingVisualizationMat, allTrackings);
+	if (VisualTrackingOn)
+		VisualizeTracking(TrackingVisualizationMat, allTrackings);
 
 	track_pub.publish(allTrackings);
 }
 
-void VisualizeTracking(cv_bridge::CvImage& CvbImage, people_tracker_denbyk_msg::UserTracking trackings)
+void VisualizeTracking(cv_bridge::CvImage& CvbImage, people_tracker_msg::UserTracking trackings)
 {
 	double x, y, z;
 	int Xshift = CvbImage.image.cols / 2;
 	int Yshift = CvbImage.image.rows / 2;
 	SingleUserTracking u;
+	TrackedPoint p;
 	for (int i = 0; i < trackings.user.size(); i++)
 	{
 		u = trackings.user[i];
-		x = -u.Pos_X/u.Pos_Z * CvbImage.image.cols/0.5543;
-		y = -u.Pos_Y/u.Pos_Z * CvbImage.image.rows/0.5543;//0.4046;
-		z = 1 / u.Pos_Z * 100;
-		//std::cout << "x/z = " << u.Pos_Y/u.Pos_Z;
+		p.x = u.Pos_X;
+		p.y = u.Pos_Y;
+		p.z = u.Pos_Z;
+		p = CameraLinkToCameraDepthOpticalFrame(p);
+
+		//TODO: fix this, x,y,z have new meaning now.
+		x = -p.x/p.z * CvbImage.image.cols/0.5543;
+		y = -p.y/p.z * CvbImage.image.rows;
+		z = 1 / p.z * 100;
+		//std::cout << "x/z = " << p.y/p.z;
 		//std::cout << "x =" << x << " y = " << y << " z = " << z;
 		cv::circle(CvbImage.image, cv::Point(x+Xshift, y+Yshift), z, CV_RGB(200,50,200), 5);
 	}
-
 
 	//sensor_msgs::ImagePtr ptr =
 	TrackingVisualizationImage = *CvbImage.toImageMsg(); // ptr ;
@@ -210,70 +215,54 @@ void VisualizeTracking(cv_bridge::CvImage& CvbImage, people_tracker_denbyk_msg::
 
 //calcola e pubblica posizione e velocità di user
 
-SingleUserTracking calcSingleUserTracking(XnUserID const& user, SingleUserTracking& PrevTracking)
+SingleUserTracking calcSingleUserTracking(XnUserID const& user, SingleUserTracking& PrevTracking, TrackingDenoiser& td)
 {
-	//std::cout<<"calcSingleUserTracking\n";
 
 	//ottiene posizione e orientamento busto di user
 	XnSkeletonJointPosition joint_position;
-	XnSkeletonJointOrientation joint_orientation;
-
 
 	if(g_UserGenerator.GetSkeletonCap().IsTracking(user))
 	{
 		//ottiene posizione e orientamento di testa e torso
 		g_UserGenerator.GetSkeletonCap().GetSkeletonJointPosition(user, WHAT_TO_TRACK, joint_position);
-		//g_UserGenerator.GetSkeletonCap().GetSkeletonJointOrientation(user, WHAT_TO_TRACK, joint_orientation);
-
 
 		if(joint_position.fConfidence < 1)
 		{
-			//std::cout << "no confidence f: " << joint_position.fConfidence << "\n";
 			return NullUserTracking;
 		}
 	}
 	else
 	{
-		//std::cout << "no tracking\n";
 		return NullUserTracking;
 	}
-	//estrai x,y,z (posizioni)
-	double x = -joint_position.position.X/1000;
-	double y = joint_position.position.Y/1000;
-	double z = joint_position.position.Z/1000;
+	TrackedPoint rawTrackedPoint;
+	rawTrackedPoint.x = joint_position.position.X/1000;
+	rawTrackedPoint.y = joint_position.position.Y/1000;
+	rawTrackedPoint.z = joint_position.position.Z/1000;
+	rawTrackedPoint = CameraDepthOpticalFrameToCameraLink(rawTrackedPoint);
 
-	//floor to mm
-	x = FloorTo(x, min_position_precision);
-	y = FloorTo(y, min_position_precision);
-	z = FloorTo(z, min_position_precision);
+	//filtra con media mobile
+	td.addTracking(rawTrackedPoint);
+	TrackedPoint p = td.getAvg();
 
-	//TODO: ma la rotazione serve?
-	//estrae matrice di rotazione
-//	XnFloat* m = joint_orientation.orientation.elements;
-//	KDL::Rotation rotation(m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7], m[8]);
-//	double qx, qy, qz, qw;
-//	rotation.GetQuaternion(qx, qy, qz, qw);
-////	std::cout << m[0] << "\t" << m[1] << "\t" << m[2] << "\n";
-////	std::cout << m[3] << "\t" << m[4] << "\t" << m[5] << "\n";
-////	std::cout << m[6] << "\t" << m[7] << "\t" << m[8] << "\n";
-////	std::cout << "----------------------\n";
-//
-//	double roll, pitch, yaw;
-//	rotation.GetRPY(roll, pitch, yaw);
-//	double pitch_degree = 180 / pi * pitch;
-	//std::cout << "pitch: " << pitch_degree << "\n";
-	//output
-	//oss << "torso_" << user;
+	double xfiltered = p.x;
+	double yfiltered = p.y;
+	double zfiltered = p.z;
+
+	//floor to mm. questi dati sono quelli pubblicati
+	double xfilteredRounded = ApplyNewPrecision(xfiltered, min_position_precision);
+	double yfilteredRounded = ApplyNewPrecision(yfiltered, min_position_precision);
+	double zfilteredRounded = ApplyNewPrecision(zfiltered, min_position_precision);
 
 	SingleUserTracking sut;
 
 	sut.timestamp = ros::Time::now();
 	sut.UserID = user;
-	sut.Pos_X = x;
-	sut.Pos_Y = y;
-	sut.Pos_Z = z;
+	sut.Pos_X = xfilteredRounded;
+	sut.Pos_Y = yfilteredRounded;
+	sut.Pos_Z = zfilteredRounded;
 
-	if (PrevTracking.UserID == -1)//PrevTracking == NullUserTracking
+	if (PrevTracking.UserID == -1)
 	{
 		//è il primo tracking per questo utente, nn ho info su stato precedente. parte "da fermo"
 		sut.Vel_X = 0;
@@ -282,48 +271,76 @@ SingleUserTracking calcSingleUserTracking(XnUserID const& user, SingleUserTracki
 	}
 	else
 	{
+		//std::cout << "ok \n";
 		ros::Duration dur = sut.timestamp - PrevTracking.timestamp;
 		double time_delay = dur.toSec();
 		//calcola velocità tra istanti successivi
-		double Vel_X = (x - PrevTracking.Pos_X) / time_delay;
-		double Vel_Y = (y - PrevTracking.Pos_Y) / time_delay;
-		double Vel_Z = (z - PrevTracking.Pos_Z) / time_delay;
+		double Vel_X = (xfiltered - PrevTracking.Pos_X) / time_delay;
+		double Vel_Y = (yfiltered - PrevTracking.Pos_Y) / time_delay;
+		double Vel_Z = (zfiltered - PrevTracking.Pos_Z) / time_delay;
 
-		sut.Vel_X = FloorTo(Vel_X, min_velocity_precision);
-		sut.Vel_Y = FloorTo(Vel_Y, min_velocity_precision);
-		sut.Vel_Z = FloorTo(Vel_Z, min_velocity_precision);
+		//std::cout << Vel_X << "\n";
+
+		sut.Vel_X = applyThreshold(Vel_X, VELOCITY_THRESHOLD);
+		sut.Vel_Y = applyThreshold(Vel_Y, VELOCITY_THRESHOLD);
+		sut.Vel_Z = applyThreshold(Vel_Z, VELOCITY_THRESHOLD);
+
+		//std::cout << "dopo thresh: " << Vel_X << "\n";
 	}
+	//write to PrevTracking i dati attuali (NON arrotondati ma filtrati)
+	PrevTracking.UserID = sut.UserID;
+	PrevTracking.timestamp = sut.timestamp;
+	PrevTracking.Pos_X = xfiltered;
+	PrevTracking.Pos_Y = yfiltered;
+	PrevTracking.Pos_Z = zfiltered;
 	return sut;
 }
 
-double FloorTo(double num, double LeastSignificantChange)
+/*
+ * depth_optical > camera_link
+ * x > -y
+ * y > -z
+ * z > x
+ * */
+TrackedPoint CameraDepthOpticalFrameToCameraLink(TrackedPoint old)
 {
-	return floor(num/LeastSignificantChange)*LeastSignificantChange;
+	TrackedPoint newPoint;
+	newPoint.x = old.z;
+	newPoint.y = -old.x;
+	newPoint.z = -old.y;
+	//aggiusto offeset tra i due frames
+	newPoint.y -= 0.02;
+	return newPoint;
 }
 
-bool checkCenterOfMass(XnUserID const& user)
+TrackedPoint CameraLinkToCameraDepthOpticalFrame(TrackedPoint old)
 {
-	XnPoint3D center_of_mass;
-	XnStatus status = g_UserGenerator.GetCoM(user, center_of_mass);
+	TrackedPoint newPoint;
+	newPoint.x = old.z;
+	newPoint.y = -old.x;
+	newPoint.z = -old.y;
+	//aggiusto offeset tra i due frames
+	newPoint.y += 0.02;
+	return newPoint;
+}
 
-	if(status != XN_STATUS_OK || (center_of_mass.X == 0 && center_of_mass.Y == 0 && center_of_mass.Z == 0))
-	{
-		return false;
-	}
-	else
-	{
-		return true;
-	}
+double applyThreshold(double num, double threshold)
+{
+	return fabs(num) >= threshold ? num : 0;
+}
+
+double ApplyNewPrecision(double num, double LeastSignificantChange)
+{
+	return floor(num/LeastSignificantChange)*LeastSignificantChange;
 }
 
 /*callbacks---------------------------------------------------------------------------------------------*/
 
 void XN_CALLBACK_TYPE User_NewUser(xn::UserGenerator& generator, XnUserID nId, void* pCookie)
 {
-	std::cout << "newUser\n";
+	//std::cout << "newUser\n";
 	ROS_INFO("New User %d.", nId);
 
-	//se non ha ancora fatto calibrazione la carica da file e ?la salva su calibrationData?
 	if(calibrationData == NULL)
 	{
 		g_UserGenerator.GetSkeletonCap().LoadCalibrationDataFromFile(nId, genericUserCalibrationFileName.c_str());
@@ -367,8 +384,8 @@ void XN_CALLBACK_TYPE User_OutOfScene(xn::UserGenerator& generator, XnUserID nId
 /*-------------------Openni_init----------------------------------------------*/
 void openni_init(ros::NodeHandle& nh)
 {
-	std::string configFilename = ros::package::getPath("people_tracker_denbyk") + "/init/openni_tracker.xml";
-	genericUserCalibrationFileName = ros::package::getPath("people_tracker_denbyk") + "/init/GenericUserCalibration.bin";
+	std::string configFilename = ros::package::getPath("people_tracker") + "/init/openni_tracker.xml";
+	genericUserCalibrationFileName = ros::package::getPath("people_tracker") + "/init/GenericUserCalibration.bin";
 	ros::Rate loop_rate(1);
 	//valore di ritorno Xn
 	XnStatus nRetVal;
@@ -390,51 +407,22 @@ void openni_init(ros::NodeHandle& nh)
 		}
 	}
 
-	if(NOCAMERA_MODE)
+	nRetVal = g_Context.FindExistingNode(XN_NODE_TYPE_DEPTH, g_DepthGenerator);
+	if(nRetVal != XN_STATUS_OK)
 	{
-		ros::Subscriber sub = nh.subscribe("/camera/depth/image_raw", 1000, updateDepthImage);
-		// Depth generator
-		g_DepthGenerator.Create(g_Context);
-		// Mock depth generator
-		g_mock_depth.CreateBasedOn(g_DepthGenerator,"the mock-depth");
-		// Create user generator using mock depth generator
-		xn::Query g_Query;
-		g_Query.AddNeededNode("mock-depth");
-		g_UserGenerator.Create(g_Context, &g_Query);
+		ROS_ERROR("Find depth generator failed: %s", xnGetStatusString(nRetVal));
 	}
-	else
+	//cerca nodo ti tipo user generator e lo salva in g_UserGenerator
+	nRetVal = g_Context.FindExistingNode(XN_NODE_TYPE_USER, g_UserGenerator);
+	if (nRetVal != XN_STATUS_OK)
 	{
-		//std::string frame_id;
-		nRetVal = g_Context.FindExistingNode(XN_NODE_TYPE_DEPTH, g_DepthGenerator);
-		if(nRetVal != XN_STATUS_OK)
-		{
-			ROS_ERROR("Find depth generator failed: %s", xnGetStatusString(nRetVal));
-		}
-		//cerca nodo ti tipo user generator e lo salva in g_UserGenerator
-		nRetVal = g_Context.FindExistingNode(XN_NODE_TYPE_USER, g_UserGenerator);
+		//crea lo userGenerator del g_Context. SE non riesce probabilmente manca NITE
+		nRetVal = g_UserGenerator.Create(g_Context);
 		if (nRetVal != XN_STATUS_OK)
 		{
-			//crea lo userGenerator del g_Context. SE non riesce probabilmente manca NITE
-			nRetVal = g_UserGenerator.Create(g_Context);
-			if (nRetVal != XN_STATUS_OK)
-			{
-				ROS_ERROR("NITE is likely missing: Please install NITE >= 1.5.2.21. Check the readme for download information. Error Info: User generator failed: %s", xnGetStatusString(nRetVal));
-				exit(nRetVal);
-			}
+			ROS_ERROR("NITE is likely missing: Please install NITE >= 1.5.2.21. Check the readme for download information. Error Info: User generator failed: %s", xnGetStatusString(nRetVal));
+			exit(nRetVal);
 		}
-		//test tracking visualization-------------
-		subImage = nh.subscribe("/camera/rgb/image_color", 10, updateRgbImage);
-		TrackingVisualization_pub = nh.advertise<sensor_msgs::Image>("peopleTrackerVisualization", 10);
-//		// Depth generator
-//		g_DepthGenerator.Create(g_Context);
-//		// Mock depth generator
-//		g_mock_depth.CreateBasedOn(g_DepthGenerator,"the mock-depth");
-//		// Create user generator using mock depth generator
-//		xn::Query g_Query;
-//		g_Query.AddNeededNode("mock-depth");
-//		g_UserGenerator.Create(g_Context, &g_Query);
-
-		//\test------------
 	}
 
 	//veriica che lo userGenerator creato supporti SKELETON
@@ -461,16 +449,19 @@ void openni_init(ros::NodeHandle& nh)
 	//usando la chiave camera_frame_id e lo memorizza nella variabile frame_id
 	std::string frame_id("camera_depth_frame");
 	nh.getParam("camera_frame_id", frame_id);
+
+	//tracking visualization-------------
+	subImage = nh.subscribe("/camera/rgb/image_color", 10, updateRgbImage);
+	TrackingVisualization_pub = nh.advertise<sensor_msgs::Image>("peopleTrackerVisualization", 10);
 }
+
 
 void updateRgbImage(const sensor_msgs::Image& rgbImageMsg)
 {
 	TrackingVisualizationMat = *cv_bridge::toCvCopy(rgbImageMsg);
 }
 
-
 void updateDepthImage(const sensor_msgs::Image& depthImageMsg)
 {
 	currDepthImage = depthImageMsg;
-	std::cout << "updateDepthImage";
 }

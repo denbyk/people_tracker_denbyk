@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 2.8.3)
 
-project(people_tracker_denbyk)
+project(people_tracker)
 
 #orocos_kdl va a parte perchè non è un package catkin
 find_package(orocos_kdl REQUIRED)
@@ -11,7 +11,7 @@ find_package(catkin REQUIRED COMPONENTS
   sensor_msgs
   roslib
   tf
-  people_tracker_denbyk_msg
+  people_tracker_msg
   cv_bridge
 )
 
@@ -37,17 +37,17 @@ link_directories(${OpenCV_LIBRARY_DIRS})
 link_directories(${cv_bridge_LIBRARY_DIRS})
 
 #real stuff
-add_executable(pplTracker src/PeopleTracker_denbyk.cpp)
-add_dependencies(pplTracker people_tracker_denbyk_msg_generate_messages_cpp)
+add_executable(people_tracker src/people_tracker.cpp src/TrackingDenoiser.cpp)
+add_dependencies(people_tracker people_tracker_msg_generate_messages_cpp)
 
-target_link_libraries(pplTracker
+target_link_libraries(people_tracker
   ${catkin_LIBRARIES}
 	${OpenNI_LIBRARIES}
 	${orocos_kdl_LIBRARIES}
   ${OpenCV_LIBRARIES}
 )
 
-target_link_libraries(pplTracker OpenNI)
+target_link_libraries(people_tracker OpenNI)
 
 
 #just to test
